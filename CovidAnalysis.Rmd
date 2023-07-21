@@ -1,0 +1,231 @@
+---
+title: "Covid Data Analysis"
+author: ""
+date: "2023-07-19"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Covid Data Analysis
+
+This report will analyze data about cases and deaths of the Covid 19 virus, reported both in the US and globaly. The data set used was provided by Johns Hopkins and is available on github. First we need to read in the four data sets.
+
+## Cleaning Data
+
+```{r message = FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggstatsplot)
+```
+
+```{r}
+cov19_confirmed_us <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv")
+
+head(cov19_confirmed_us)
+
+cov19_deaths_us <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv")
+
+head(cov19_deaths_us)
+
+cov19_confirmed_global <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv")
+
+head(cov19_confirmed_global)
+
+cov19_deaths_global <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv")
+
+head(cov19_deaths_global)
+
+
+```
+
+We now need to do some cleaning of the data. We will start by doing some minor reformatting and dropping the Lat and Long columns that won't be used.
+
+```{r}
+cov19_confirmed_global <- cov19_confirmed_global %>%
+  pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long), names_to = 'date', values_to = 'cases') %>%
+  select(-c(Lat,Long))
+  
+  
+cov19_deaths_global <- cov19_deaths_global %>%
+   pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long), names_to = 'date', values_to = 'deaths') %>%
+  select(-c(Lat,Long))
+
+
+
+```
+
+Next we can combine tables to make a simpler object to work with. We will combine the global cases and global deaths data into a single global variable. We will then filter out where cases are 0.
+
+```{r}
+
+global <- cov19_confirmed_global %>%
+  full_join(cov19_deaths_global) %>%
+  rename(Country_Region = 'Country/Region', Province_State = 'Province/State') %>%
+  mutate(date=mdy(date))
+  
+  global <- global %>% filter(cases>0)
+```
+
+We also need to clean up some of the US data.
+
+```{r}
+cov19_confirmed_us <- cov19_confirmed_us %>%
+  pivot_longer(cols = -(UID:Combined_Key), names_to = "date", values_to = 'cases') %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+  
+cov19_deaths_us <- cov19_deaths_us %>%
+  pivot_longer(cols = -(UID:Population), names_to = 'date', values_to = 'deaths') %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+```
+
+And now we can combine US cases and deaths into a single US variable
+
+```{r}
+US <- cov19_confirmed_us %>%
+  full_join(cov19_deaths_us)
+```
+
+Missing from the global data is population data. We can read in additional country population data and join it with our global data set.
+
+```{r}
+global <- global %>%
+  unite("Combined_Key", c(Province_State, Country_Region), sep = ", ", na.rm = TRUE, remove = FALSE)
+
+uid <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv")
+
+global <- global %>%
+ left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID,FIPS)) %>%
+  select(Province_State, Country_Region, date, cases, deaths, Population, Combined_Key.x)
+```
+## Global Analysis
+
+Now that the data has been cleaned up we can analyze the data. One thing that we can look at is to see the most deaths by country.
+
+``` {r}
+most_deaths <- global %>%
+  group_by(Country_Region) %>%
+  summarize(max_deaths = max(deaths, na.rm = TRUE)) %>%
+  arrange(desc(max_deaths)) %>%
+  head(5)
+
+most_deaths
+```
+
+Since the US had the most deaths, we can visualize this over time.
+``` {r}
+
+US_deaths <- global %>%
+  filter(Country_Region == 'US') %>%
+  arrange(date)
+
+US_deaths_plot <- ggplot(US_deaths, aes(x = date, y = deaths))+
+  geom_line() +
+   labs(title = 'Covid 19 Deaths in US Over Time', x = 'Time', y = 'Deaths')
+
+US_deaths_plot
+
+```
+We can also plot it alongside the other top 5 countries as a comparison.
+
+``` {r}
+
+Combined_deaths <- global %>%
+  filter(Country_Region == 'US'| Country_Region == 'Brazil' | Country_Region == 'India' | Country_Region == 'Russia'| Country_Region == 'Mexico' ) %>%
+  arrange(date)
+
+
+Combined_deaths_plot <- ggplot(Combined_deaths, aes(x=date, y=deaths, group = Country_Region))+
+  geom_line(aes(color = Country_Region))+
+   labs(title = 'Covid 19 Deaths Over Time', x = 'Time', y = 'Deaths')
+
+Combined_deaths_plot
+
+```
+We can also look at which countries had the least deaths on any given day. Since there are some regions (like Antarctica), that will have 0, or some countries that had 0 deaths in a day, we will filter those out.
+
+``` {r}
+least_deaths <- global %>%
+  group_by(Country_Region) %>%
+  summarize(max_deaths = max(deaths, na.rm = TRUE)) %>%
+  filter(max_deaths >0) %>%
+  arrange(desc(max_deaths)) %>%
+  tail(5)
+
+least_deaths
+```
+## State Analysis 
+
+Just as we viewed the countries with the most covid deaths, we can view the top 5 US states by covid deaths.
+
+``` {r}
+most_deaths_US <- US %>%
+  group_by(Province_State) %>%
+  summarize(max_deaths = max(deaths, na.rm = TRUE)) %>%
+  arrange(desc(max_deaths)) %>%
+  head(5)
+
+most_deaths_US
+```
+``` {r}
+least_deaths_US <- US %>%
+  group_by(Province_State) %>%
+  summarize(max_deaths = max(deaths, na.rm = TRUE)) %>%
+  filter(max_deaths >0) %>%
+  arrange(desc(max_deaths)) %>%
+  tail(5)
+
+least_deaths_US
+```
+``` {r}
+
+State_deaths <- US %>%
+  filter(Province_State == 'California'| Province_State == 'Florida' | Province_State == 'Arizona' | Province_State == 'Illinois'| Province_State == 'New York' ) %>%
+  arrange(date)
+
+
+State_deaths_plot <- ggplot(State_deaths, aes(x=date, y=deaths, group = Province_State))+
+  geom_line(aes(color = Province_State))+
+   labs(title = 'Covid 19 Deaths Over Time', x = 'Time', y = 'Deaths')
+
+State_deaths_plot
+
+```
+
+The states with the most deaths in the US appear to be states with high populations. This intuitively makes sense, as with a higher population there can be higher death totals. Population density can also effect the ability for viruses to be transfered. We can take a look at the correlation between covid deaths and population by state.
+```{r}
+
+US_deaths_population <- US %>%
+  group_by(Province_State, Population) %>%
+  summarize(max_deaths = max(deaths, na.rm = TRUE)) %>%
+  arrange(desc(max_deaths))
+
+
+
+```
+
+```{r}
+
+cor.test(US_deaths_population$Population, US_deaths_population$max_deaths, method = "pearson")
+
+
+
+ggscatterstats(data = US_deaths_population, x = Population, y = max_deaths)
+
+
+```
+This shows that there does seem to be a strong correlation between population of states and their covid deaths.
+
+## Conclusions and Bias
+
+This report looked at covid deaths both by country and by states in the US. Unsurprisingly, it was found that both the countrys and states with the highest covid deaths were areas with lsarge populations. This generally makes sense, however there are other factors that should also be considered. Reporting of deaths may have varied, especially globally where different policies for reporting were put in place, and some countries may not have reported at all. There are also serveral other factors that could have impacted covid deaths beyond population. Such factors include varying healthcare systems, variation in regulations such as lockdown and mask policies, access to vaccines, and many others.
